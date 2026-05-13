@@ -32,6 +32,9 @@ github-project-toolkit list-items
 There are no third-party runtime dependencies. `requirements.txt` is present to
 make that explicit for users and automation.
 
+The CLI writes best-effort JSON lifecycle and API failure events to syslog under
+the `github-project-toolkit` identity. Secrets and command values are not logged.
+
 ## Development
 
 Create a local environment if desired:

@@ -18,9 +18,15 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+try:
+    import syslog
+except ImportError:  # pragma: no cover - syslog is Unix-specific.
+    syslog = None  # type: ignore[assignment]
+
 
 DEFAULT_API_URL = "https://api.github.com/graphql"
 DEFAULT_PROJECT_VERSION = "v2"
+SYSLOG_IDENT = "github-project-toolkit"
 SUPPORTED_PROJECT_VERSIONS = {DEFAULT_PROJECT_VERSION}
 REQUIRED_ENV = (
     "GITHUB_TOKEN",
@@ -31,6 +37,7 @@ REQUIRED_ENV = (
 )
 
 _cache: dict[str, Any] = {}
+_syslog_opened = False
 GITHUB_CONTENT_URL_RE = re.compile(
     r"^https://github\.com/([^/\s]+)/([^/\s]+)/(issues|pull)/([0-9]+)(?:[/?#].*)?$"
 )
@@ -38,6 +45,31 @@ GITHUB_CONTENT_URL_RE = re.compile(
 
 class ProjectCrudError(Exception):
     """Raised for user-facing command failures."""
+
+
+def log_event(level: str, event: str, **fields: Any) -> None:
+    """Write a compact JSON event to syslog when syslog is available."""
+
+    if syslog is None:
+        return
+
+    global _syslog_opened
+    priority_by_level = {
+        "debug": syslog.LOG_DEBUG,
+        "info": syslog.LOG_INFO,
+        "warning": syslog.LOG_WARNING,
+        "error": syslog.LOG_ERR,
+    }
+    priority = priority_by_level.get(level, syslog.LOG_INFO)
+    payload = {"event": event, **fields}
+    try:
+        if not _syslog_opened:
+            syslog.openlog(SYSLOG_IDENT, syslog.LOG_PID, syslog.LOG_USER)
+            _syslog_opened = True
+        syslog.syslog(priority, json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    except Exception:
+        # Logging must never break CLI behavior.
+        return
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -105,20 +137,25 @@ def graphql_request(query: str, variables: dict[str, Any] | None = None) -> dict
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        log_event("warning", "github_api_http_error", status_code=exc.code)
         raise ProjectCrudError(f"GitHub API HTTP {exc.code}: {body}") from exc
     except urllib.error.URLError as exc:
+        log_event("warning", "github_api_url_error", reason_type=type(exc.reason).__name__)
         raise ProjectCrudError(f"Could not reach GitHub API: {exc.reason}") from exc
 
     try:
         decoded = json.loads(body)
     except json.JSONDecodeError as exc:
+        log_event("warning", "github_api_invalid_json")
         raise ProjectCrudError(f"GitHub API returned invalid JSON: {body}") from exc
 
     if decoded.get("errors"):
+        log_event("warning", "github_api_graphql_errors", error_count=len(decoded["errors"]))
         raise ProjectCrudError(json.dumps({"errors": decoded["errors"]}, indent=2))
 
     data = decoded.get("data")
     if data is None:
+        log_event("warning", "github_api_missing_data")
         raise ProjectCrudError(f"GitHub API response did not include data: {body}")
     return data
 
@@ -911,19 +948,36 @@ def run_command(args: argparse.Namespace) -> Any:
     return command(args)
 
 
+def command_log_fields(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "command": args.command,
+        "project_version": get_project_version(args),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
     try:
+        log_event("info", "command_started", **command_log_fields(args))
         result = run_command(args)
         print_json(result)
+        log_event("info", "command_succeeded", **command_log_fields(args), exit_status=0)
         return 0
     except ProjectCrudError as exc:
         print_json({"error": str(exc)})
+        log_event(
+            "error",
+            "command_failed",
+            **command_log_fields(args),
+            error_type=type(exc).__name__,
+            exit_status=1,
+        )
         return 1
     except KeyboardInterrupt:
         print_json({"error": "Interrupted"})
+        log_event("warning", "command_interrupted", **command_log_fields(args), exit_status=130)
         return 130
 
 

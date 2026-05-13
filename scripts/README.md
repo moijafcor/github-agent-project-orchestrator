@@ -124,6 +124,16 @@ python scripts/github_project_crud.py link-pr \
 All commands print JSON. Failures also print JSON and exit with a non-zero
 status code.
 
+## Logging
+
+The CLI writes best-effort JSON events to syslog using the
+`github-project-toolkit` identity when the platform supports syslog. Logging
+never changes command output or exit status.
+
+Logged events include command lifecycle status and GitHub API failure categories.
+The tool does not log tokens, GraphQL variables, item titles, field values,
+issue or pull request URLs, raw API responses, or raw exception messages.
+
 ## Using Multiple Projects
 
 Point the same script at a different Project v2 board by changing the
