@@ -431,7 +431,6 @@ If you prefer to manage the server process yourself — for example to share it 
 
 ```bash
 python scripts/mcp_server.py --transport sse
-# Serving on http://127.0.0.1:8765 (SSE)
 ```
 
 Then point Claude Desktop at the HTTP endpoint instead:

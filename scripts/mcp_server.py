@@ -214,15 +214,10 @@ if __name__ == "__main__":
     _p = _argparse.ArgumentParser(description="GitHub Projects MCP server")
     _p.add_argument(
         "--transport",
-        choices=("stdio", "sse"),
+        choices=("stdio", "sse", "streamable-http"),
         default="stdio",
         help="Transport to use (default: stdio — Claude Desktop spawns this process)",
     )
-    _p.add_argument("--host", default="127.0.0.1", help="SSE bind address (default: 127.0.0.1)")
-    _p.add_argument("--port", type=int, default=8765, help="SSE port (default: 8765)")
     _args = _p.parse_args()
 
-    if _args.transport == "sse":
-        mcp.run(transport="sse", host=_args.host, port=_args.port)
-    else:
-        mcp.run(transport="stdio")
+    mcp.run(transport=_args.transport)
