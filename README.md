@@ -1,12 +1,38 @@
 # GitHub Project CRUD Toolkit
 
-A zero-dependency Python 3.11+ CLI for creating, reading, updating, and archiving items on a GitHub Projects v2 board via the GraphQL API.
+A Python 3.11+ toolkit for creating, reading, updating, and archiving items on a GitHub Projects v2 board via the GraphQL API.
 
-All configuration is read from environment variables, making it straightforward to wire into CI pipelines, GitHub Actions workflows, and shell scripts without modifying any code.
+It ships in two modes:
+
+- **CLI** (`scripts/github_project_crud.py`) — zero runtime dependencies, pipes JSON to stdout, integrates with CI and shell scripts.
+- **MCP server** (`scripts/mcp_server.py`) — wraps the CLI as a local [Model Context Protocol](https://modelcontextprotocol.io) server so Claude Desktop can manage your project board in plain language.
+
+All configuration is read from environment variables, making it straightforward to wire into CI pipelines, GitHub Actions workflows, shell scripts, and AI assistants without modifying any code.
+
+---
+
+## Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Quick Start](#quick-start)
+- [Commands](#commands)
+- [MCP Server](#mcp-server)
+- [GitHub Actions Integration](#github-actions-integration)
+- [Using Multiple Projects](#using-multiple-projects)
+- [Architecture](#architecture)
+- [Known Limitations](#known-limitations)
+- [Development](#development)
+- [Contributing](#contributing)
+- [Security](#security)
 
 ---
 
 ## Features
+
+### CLI
 
 - Create draft project items
 - List all project items with their field values
@@ -18,12 +44,24 @@ All configuration is read from environment variables, making it straightforward 
 - All output is newline-terminated JSON — easy to pipe into `jq`
 - Best-effort JSON lifecycle events written to syslog (tokens and response bodies are never logged)
 
+### MCP server
+
+- Exposes every CLI operation as an MCP tool callable by Claude Desktop
+- Runs entirely on localhost — no public exposure, no external services
+- Loads `.env` automatically so the token never appears in conversation history
+
 ---
 
 ## Requirements
 
 - Python 3.11 or later
 - A GitHub personal access token (classic or fine-grained) with project access
+
+---
+
+## Contributors
+
+See [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
 ---
 
@@ -48,6 +86,12 @@ github-project-toolkit --help
 pip install -e ".[dev]"
 ```
 
+**Install MCP server dependencies (required only for `scripts/mcp_server.py`):**
+
+```bash
+pip install -e ".[mcp]"
+```
+
 ---
 
 ## Configuration
@@ -55,7 +99,7 @@ pip install -e ".[dev]"
 All settings are read from environment variables. Copy `.env.example` to `.env` and fill in your values — the script does not load `.env` automatically; use `source .env` or a tool like `direnv`.
 
 | Variable | Required | Description |
-|---|---|---|
+| --- | --- | --- |
 | `GITHUB_TOKEN` | Yes | Personal access token (classic or fine-grained) |
 | `GITHUB_OWNER` | Yes | Organization login or GitHub username that owns the project |
 | `GITHUB_OWNER_TYPE` | Yes | `org` for an organization, `user` for a personal account |
@@ -274,7 +318,7 @@ All error conditions produce JSON on stdout with a non-zero exit code:
 Common errors and their causes:
 
 | Error message | Cause |
-|---|---|
+| --- | --- |
 | `Missing required environment variable` | One or more required env vars are unset or empty |
 | `Could not resolve GitHub Project v2` | Wrong owner, project number, or insufficient token permissions |
 | `GitHub API request failed with HTTP 401` | Token missing, expired, or not permitted |
@@ -282,6 +326,107 @@ Common errors and their causes:
 | `Field not found` | Field name does not match exactly — run `list-fields` |
 | `Option not found` | Single-select value does not match exactly — run `list-fields` |
 | `Could not resolve issue / pull request` | URL is incorrect or token cannot read that repository |
+
+---
+
+## MCP Server
+
+`scripts/mcp_server.py` wraps the toolkit as a [Model Context Protocol](https://modelcontextprotocol.io) server. Once running, Claude Desktop on the same machine can create items, update fields, link issues, and archive cards using plain English — no command-line required.
+
+**Connection model:**
+
+```text
+Claude Desktop (your workstation)
+        ↓ http://127.0.0.1:8765/sse   (never leaves the machine)
+  MCP server — scripts/mcp_server.py
+        ↓
+  github_project_crud.py
+        ↓
+  GitHub GraphQL API (api.github.com)
+```
+
+### Prerequisites
+
+Install the two extra dependencies (not needed for the plain CLI):
+
+```bash
+pip install "mcp[cli]>=1.0" "python-dotenv>=1.0"
+# or via the package extra:
+pip install -e ".[mcp]"
+```
+
+### Environment setup
+
+The MCP server loads `.env` from the project root automatically. Copy the example and fill in your values:
+
+```bash
+cp .env.example .env
+```
+
+```bash
+# .env
+GITHUB_TOKEN=github_pat_...
+GITHUB_OWNER=my-org
+GITHUB_OWNER_TYPE=org          # org | user
+GITHUB_PROJECT_NUMBER=1
+GITHUB_REPOSITORY=my-org/my-repo
+```
+
+### Running the server
+
+```bash
+cd /path/to/github-agent-project-orchestrator
+python scripts/mcp_server.py
+# Serving on http://127.0.0.1:8765 (SSE)
+```
+
+Keep this terminal open while using Claude Desktop.
+
+### Claude Desktop configuration
+
+Add the server to your Claude Desktop config (typically `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+
+```json
+{
+  "mcpServers": {
+    "github_projects": {
+      "url": "http://127.0.0.1:8765/sse"
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving. You should see **GitHub Projects** appear in the tool list.
+
+### Available MCP tools
+
+| Tool | Description |
+| --- | --- |
+| `list_project_items` | Return all items on the board with their field values |
+| `list_project_fields` | Return all fields and single-select options |
+| `create_project_item` | Create a new draft item (`title`, optional `body`) |
+| `update_project_item_field` | Update a field by item ID (`field_type`: `text`, `number`, `single-select`) |
+| `archive_project_item` | Archive an item by its node ID |
+| `link_issue_to_project` | Add an existing issue to the board by URL |
+| `link_pr_to_project` | Add an existing pull request to the board by URL |
+
+### Example prompts
+
+Once connected, you can say things like:
+
+- "Show me everything on the project board."
+- "Create a task called 'Migrate auth service to OAuth 2.1' with a description of the acceptance criteria."
+- "Move item PVTI_xxx to Done."
+- "Archive all items with status Cancelled." *(Claude will call `list_project_items` then loop over matching IDs)*
+- "Link `https://github.com/my-org/my-repo/issues/99` to the project and set its status to In Progress."
+
+The server always returns structured JSON; Claude formats it in the conversation.
+
+### Security notes
+
+- The server binds to `127.0.0.1` only and is never reachable from the internet.
+- `GITHUB_TOKEN` is read from the local `.env` file and is never sent to Claude or logged.
+- SSE connections are unauthenticated on localhost — do not change the bind address.
 
 ---
 
@@ -379,9 +524,14 @@ python scripts/github_project_crud.py list-fields
 
 ## Architecture
 
-The entire implementation is a single file: [`scripts/github_project_crud.py`](scripts/github_project_crud.py).
+The toolkit has two entry points that share the same core library:
 
-**Request flow:**
+| File | Role |
+| --- | --- |
+| [`scripts/github_project_crud.py`](scripts/github_project_crud.py) | Core library + CLI (`argparse`) |
+| [`scripts/mcp_server.py`](scripts/mcp_server.py) | MCP server thin wrapper (`FastMCP`) |
+
+### CLI request flow
 
 1. CLI arguments are parsed by `argparse`; all required env vars are validated before any API call is made.
 2. Every command resolves the project's node ID via `get_project_id()`, which caches the result in-process so subsequent calls within the same invocation are free.
@@ -389,7 +539,11 @@ The entire implementation is a single file: [`scripts/github_project_crud.py`](s
 4. `get_project_items()` and `get_project_fields()` implement cursor-based pagination and follow all `hasNextPage` signals until the full result set is fetched.
 5. Results are printed as indented JSON to stdout.
 
-**Logging:**
+### MCP server flow
+
+`mcp_server.py` imports `github_project_crud` directly and registers each public function as a `FastMCP` tool. Tool return values are serialized JSON strings so Claude can read and summarize them. The server runs a persistent SSE loop on `127.0.0.1:8765`; Claude Desktop connects once and reuses the connection for the lifetime of the conversation.
+
+### Logging
 
 The CLI writes best-effort JSON events to syslog under the `github-project-toolkit` identity when `syslog` is available (Linux/macOS). Events cover command lifecycle, API error categories, and pagination warnings. The following are never logged: tokens, GraphQL variables, item titles, field values, issue or pull request URLs, and raw API response bodies.
 
@@ -398,7 +552,7 @@ The CLI writes best-effort JSON events to syslog under the `github-project-toolk
 ## Known Limitations
 
 | Limitation | Detail |
-|---|---|
+| --- | --- |
 | Assignee and label pagination | Up to 20 assignees and 20 labels are returned per item field value. Items hitting this limit trigger a `user_field_may_be_truncated` or `label_field_may_be_truncated` syslog warning. |
 | GitHub Projects v2 only | GitHub Projects v1 (classic) is not supported. |
 | Supported field types | `text`, `number`, `single-select`. Date and iteration fields can be read but not written. |
@@ -410,15 +564,20 @@ The CLI writes best-effort JSON events to syslog under the `github-project-toolk
 
 ```bash
 # Create and activate a virtual environment
-python -m venv .venv
+python3 -m venv .venv
 . .venv/bin/activate
+
+# CLI only
 pip install -e ".[dev]"
+
+# CLI + MCP server
+pip install -e ".[dev,mcp]"
 
 # Run the test suite (41 tests, no network required)
 python -m pytest tests/ -v
 
 # Validate syntax without running tests
-python -B -m py_compile scripts/github_project_crud.py tests/test_github_project_crud.py
+python -B -m py_compile scripts/github_project_crud.py scripts/mcp_server.py tests/test_github_project_crud.py
 
 # Lint
 ruff check .
