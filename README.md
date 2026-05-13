@@ -47,7 +47,8 @@ Project identity (owner, type, and board number) is passed as CLI flags or per-c
 ### MCP server
 
 - Exposes every CLI operation as an MCP tool callable by Claude Desktop
-- Runs entirely on localhost — no public exposure, no external services
+- Default stdio transport — Claude Desktop spawns the process; no separate server to start
+- Optional SSE mode (`--transport sse`) for persistent or multi-client setups
 - Loads `.env` automatically so the token never appears in conversation history
 
 ---
@@ -363,17 +364,19 @@ Common errors and their causes:
 
 `scripts/mcp_server.py` wraps the toolkit as a [Model Context Protocol](https://modelcontextprotocol.io) server. Once running, Claude Desktop on the same machine can create items, update fields, link issues, and archive cards using plain English — no command-line required.
 
-**Connection model:**
+**Connection model (stdio — default):**
 
 ```text
 Claude Desktop (your workstation)
-        ↓ http://127.0.0.1:8765/sse   (never leaves the machine)
+        ↓ spawns process, stdin/stdout
   MCP server — scripts/mcp_server.py
         ↓
   github_project_crud.py
         ↓
   GitHub GraphQL API (api.github.com)
 ```
+
+Claude Desktop manages the process lifecycle — no separate terminal needed.
 
 ### Prerequisites
 
@@ -394,16 +397,6 @@ The MCP server loads `.env` from the project root automatically. Only `GITHUB_TO
 GITHUB_TOKEN=github_pat_...
 ```
 
-### Running the server
-
-```bash
-cd /path/to/github-agent-project-orchestrator
-python scripts/mcp_server.py
-# Serving on http://127.0.0.1:8765 (SSE)
-```
-
-Keep this terminal open while using Claude Desktop.
-
 ### Claude Desktop configuration
 
 Add the server to your Claude Desktop config. Default locations by platform:
@@ -418,13 +411,40 @@ Add the server to your Claude Desktop config. Default locations by platform:
 {
   "mcpServers": {
     "github_projects": {
-      "url": "http://127.0.0.1:8765/sse"
+      "command": "python",
+      "args": ["/full/path/to/scripts/mcp_server.py"],
+      "env": {
+        "GITHUB_TOKEN": "github_pat_..."
+      }
     }
   }
 }
 ```
 
+Replace `/full/path/to/scripts/mcp_server.py` with the absolute path on your machine. The `env` block is the recommended way to pass the token — it avoids relying on a `.env` file being in the right place when Claude Desktop spawns the process.
+
 Restart Claude Desktop after saving. You should see **GitHub Projects** appear in the tool list.
+
+### Running as a persistent SSE server (optional)
+
+If you prefer to manage the server process yourself — for example to share it across multiple MCP clients — start it with `--transport sse`:
+
+```bash
+python scripts/mcp_server.py --transport sse
+# Serving on http://127.0.0.1:8765 (SSE)
+```
+
+Then point Claude Desktop at the HTTP endpoint instead:
+
+```json
+{
+  "mcpServers": {
+    "github_projects": {
+      "url": "http://127.0.0.1:8765/sse"
+    }
+  }
+}
+```
 
 ### Available MCP tools
 
@@ -454,9 +474,9 @@ The server always returns structured JSON; Claude formats it in the conversation
 
 ### Security notes
 
-- The server binds to `127.0.0.1` only and is never reachable from the internet.
-- `GITHUB_TOKEN` is read from the local `.env` file and is never sent to Claude or logged.
-- SSE connections are unauthenticated on localhost — do not change the bind address.
+- In stdio mode the process is private to Claude Desktop — no network port is opened.
+- In SSE mode the server binds to `127.0.0.1` only; SSE connections are unauthenticated on localhost — do not change the bind address.
+- `GITHUB_TOKEN` is read from the `env` block in `claude_desktop_config.json` or from a local `.env` file and is never sent to Claude or logged.
 
 ---
 

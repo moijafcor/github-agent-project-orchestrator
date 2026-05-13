@@ -33,7 +33,7 @@ The MCP server loads `.env` from the project root automatically (for `GITHUB_TOK
 
 ## MCP tools (preferred interface for conversational agents)
 
-Connect to `http://127.0.0.1:8765/sse` when the server is running.
+Claude Desktop spawns the server automatically via the stdio transport — no separate process to start. If using SSE mode (`--transport sse`), connect to `http://127.0.0.1:8765/sse`.
 
 **Every tool requires three context parameters:**
 
@@ -98,6 +98,7 @@ Parameters: `owner`, `owner_type`, `project_number`
 Creates a new draft item. Returns the created item including its `id`.
 
 Parameters:
+
 - `owner`, `owner_type`, `project_number` — project context
 - `title` (required) — item title
 - `body` (optional) — markdown description
@@ -113,6 +114,7 @@ Parameters:
 Updates one field on one item. Requires the item node ID from `list_project_items`.
 
 Parameters:
+
 - `owner`, `owner_type`, `project_number` — project context
 - `item_id` — `PVTI_...` node ID
 - `field` — exact field name (case-sensitive)
@@ -128,6 +130,7 @@ For `single-select`, `value` must be an exact option name from `list_project_fie
 Soft-deletes an item. Archived items no longer appear in `list_project_items` results.
 
 Parameters:
+
 - `owner`, `owner_type`, `project_number` — project context
 - `item_id` — `PVTI_...` node ID
 
@@ -138,6 +141,7 @@ Parameters:
 Adds an existing GitHub Issue to the board.
 
 Parameters:
+
 - `owner`, `owner_type`, `project_number` — project context
 - `issue_url` — full URL, e.g. `https://github.com/owner/repo/issues/42`
 
@@ -148,6 +152,7 @@ Parameters:
 Adds an existing Pull Request to the board.
 
 Parameters:
+
 - `owner`, `owner_type`, `project_number` — project context
 - `pr_url` — full URL, e.g. `https://github.com/owner/repo/pull/7`
 
@@ -157,7 +162,7 @@ Parameters:
 
 ### Moving an item to a new status
 
-```
+```text
 1. list_project_fields          → confirm exact option name for Status field
 2. list_project_items           → find the item, copy its id
 3. update_project_item_field    → field="Status", value="Done", field_type="single-select"
@@ -165,7 +170,7 @@ Parameters:
 
 ### Creating and configuring a new task
 
-```
+```text
 1. list_project_fields          → confirm field names and option values
 2. create_project_item          → capture returned id
 3. update_project_item_field    → set Status
@@ -174,7 +179,7 @@ Parameters:
 
 ### Bulk status updates (e.g. archive all Cancelled items)
 
-```
+```text
 1. list_project_items           → filter locally for items where fields.Status.name == "Cancelled"
 2. archive_project_item         → call once per matching item id
 ```
