@@ -28,6 +28,8 @@ from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 mcp = FastMCP(
     "GitHub Projects",
+    host="127.0.0.1",
+    port=8765,
     instructions=(
         "CRUD operations on a GitHub Projects v2 board. "
         "Always call list_project_items first to see what exists "
