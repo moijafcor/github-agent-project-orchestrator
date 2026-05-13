@@ -7,7 +7,7 @@ It ships in two modes:
 - **CLI** (`scripts/github_project_crud.py`) — zero runtime dependencies, pipes JSON to stdout, integrates with CI and shell scripts.
 - **MCP server** (`scripts/mcp_server.py`) — wraps the CLI as a local [Model Context Protocol](https://modelcontextprotocol.io) server so Claude Desktop can manage your project board in plain language.
 
-All configuration is read from environment variables, making it straightforward to wire into CI pipelines, GitHub Actions workflows, shell scripts, and AI assistants without modifying any code.
+Project identity (owner, type, and board number) is passed as CLI flags or per-call MCP parameters, so the same binary can target different boards without touching any config file. Only `GITHUB_TOKEN` must be set in the environment.
 
 ---
 
@@ -96,18 +96,24 @@ pip install -e ".[mcp]"
 
 ## Configuration
 
-All settings are read from environment variables. Copy `.env.example` to `.env` and fill in your values — the script does not load `.env` automatically; use `source .env` or a tool like `direnv`.
+### Token (environment variable — required)
 
 | Variable | Required | Description |
 | --- | --- | --- |
 | `GITHUB_TOKEN` | Yes | Personal access token (classic or fine-grained) |
-| `GITHUB_OWNER` | Yes | Organization login or GitHub username that owns the project |
-| `GITHUB_OWNER_TYPE` | Yes | `org` for an organization, `user` for a personal account |
-| `GITHUB_PROJECT_NUMBER` | Yes | Integer project number shown in the project URL |
-| `GITHUB_REPOSITORY` | Yes | Default repository context in `owner/repo` format |
 | `GITHUB_API_URL` | No | GraphQL endpoint (default: `https://api.github.com/graphql`) |
 
-`GITHUB_REPOSITORY` sets the repository context for environment validation. Issue and pull request linking resolves content from the URL you provide, so you can link items from any repository your token can reach.
+Set `GITHUB_TOKEN` in your shell, a `.env` file (MCP server loads it automatically), or as a CI secret.
+
+### Project identity (CLI flags or environment variables)
+
+| CLI flag | Env var fallback | Description |
+| --- | --- | --- |
+| `--owner` | `GITHUB_OWNER` | Organization login or GitHub username that owns the project |
+| `--owner-type` | `GITHUB_OWNER_TYPE` | `org` for an organization, `user` for a personal account |
+| `--project-number` | `GITHUB_PROJECT_NUMBER` | Integer project number shown in the project URL |
+
+CLI flags take precedence over environment variables when both are present. The MCP server receives these as explicit parameters on every tool call.
 
 ### Token Permissions
 
@@ -128,23 +134,27 @@ Organization projects may also require the organization to allow personal access
 
 ```bash
 export GITHUB_TOKEN=github_pat_...
-export GITHUB_OWNER=my-org
-export GITHUB_OWNER_TYPE=org
-export GITHUB_PROJECT_NUMBER=1
-export GITHUB_REPOSITORY=my-org/my-repo
 
-# List all items
-python scripts/github_project_crud.py list-items
+# List all items on project board #1 in my-org
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  list-items
 
 # Create a draft item
-python scripts/github_project_crud.py create-item --title "OR-0001: Example"
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  create-item --title "OR-0001: Example"
 
 # Move an item to a different status
-python scripts/github_project_crud.py update-field \
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  update-field \
   --item-id PVTI_xxx \
   --field "Status" \
   --value "In Progress"
 ```
+
+Flags can go before or after the subcommand name. If you always work against the same board, set the env var equivalents and omit the flags.
 
 ---
 
@@ -157,7 +167,9 @@ All commands print JSON to stdout and exit `0` on success. On failure they print
 Returns all visible project items with their field values.
 
 ```bash
-python scripts/github_project_crud.py list-items
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  list-items
 ```
 
 ```json
@@ -190,7 +202,9 @@ Item types are `ISSUE`, `PULL_REQUEST`, or `DRAFT_ISSUE`. Draft items have a `co
 Returns all project fields keyed by name, including single-select option names and their IDs.
 
 ```bash
-python scripts/github_project_crud.py list-fields
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  list-fields
 ```
 
 ```json
@@ -222,8 +236,13 @@ Use `list-fields` to find exact field names and option strings before calling `u
 Creates a draft project item.
 
 ```bash
-python scripts/github_project_crud.py create-item --title "OR-0001: Example"
-python scripts/github_project_crud.py create-item --title "OR-0002: Example" --body "Initial notes"
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  create-item --title "OR-0001: Example"
+
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  create-item --title "OR-0002: Example" --body "Initial notes"
 ```
 
 ```json
@@ -246,7 +265,9 @@ Updates a single field on a project item. Use `--type` to specify the field type
 **Single-select field** (default):
 
 ```bash
-python scripts/github_project_crud.py update-field \
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  update-field \
   --item-id PVTI_lADOBdq... \
   --field "Status" \
   --value "Done"
@@ -255,7 +276,9 @@ python scripts/github_project_crud.py update-field \
 **Text field:**
 
 ```bash
-python scripts/github_project_crud.py update-field \
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  update-field \
   --item-id PVTI_lADOBdq... \
   --field "Summary" \
   --type text \
@@ -265,7 +288,9 @@ python scripts/github_project_crud.py update-field \
 **Number field:**
 
 ```bash
-python scripts/github_project_crud.py update-field \
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  update-field \
   --item-id PVTI_lADOBdq... \
   --field "Estimate" \
   --type number \
@@ -279,7 +304,9 @@ Option matching is case-sensitive. Run `list-fields` to see exact option names.
 Archives a project item by its node ID.
 
 ```bash
-python scripts/github_project_crud.py archive-item --item-id PVTI_lADOBdq...
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  archive-item --item-id PVTI_lADOBdq...
 ```
 
 ```json
@@ -294,8 +321,9 @@ python scripts/github_project_crud.py archive-item --item-id PVTI_lADOBdq...
 Adds an existing issue to the project.
 
 ```bash
-python scripts/github_project_crud.py link-issue \
-  --issue-url "https://github.com/owner/repo/issues/123"
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  link-issue --issue-url "https://github.com/owner/repo/issues/123"
 ```
 
 ### `link-pr`
@@ -303,8 +331,9 @@ python scripts/github_project_crud.py link-issue \
 Adds an existing pull request to the project.
 
 ```bash
-python scripts/github_project_crud.py link-pr \
-  --pr-url "https://github.com/owner/repo/pull/456"
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  link-pr --pr-url "https://github.com/owner/repo/pull/456"
 ```
 
 ### Error output
@@ -319,7 +348,8 @@ Common errors and their causes:
 
 | Error message | Cause |
 | --- | --- |
-| `Missing required environment variable` | One or more required env vars are unset or empty |
+| `Missing required environment variable` | `GITHUB_TOKEN` is unset or empty |
+| `Missing required environment variable(s): GITHUB_OWNER` | Flags not passed and env var not set |
 | `Could not resolve GitHub Project v2` | Wrong owner, project number, or insufficient token permissions |
 | `GitHub API request failed with HTTP 401` | Token missing, expired, or not permitted |
 | `GitHub API request failed with HTTP 403` | Token lacks project or repository access |
@@ -357,19 +387,11 @@ pip install -e ".[mcp]"
 
 ### Environment setup
 
-The MCP server loads `.env` from the project root automatically. Copy the example and fill in your values:
-
-```bash
-cp .env.example .env
-```
+The MCP server loads `.env` from the project root automatically. Only `GITHUB_TOKEN` is required there — owner and project context are passed as parameters on each tool call.
 
 ```bash
 # .env
 GITHUB_TOKEN=github_pat_...
-GITHUB_OWNER=my-org
-GITHUB_OWNER_TYPE=org          # org | user
-GITHUB_PROJECT_NUMBER=1
-GITHUB_REPOSITORY=my-org/my-repo
 ```
 
 ### Running the server
@@ -406,6 +428,8 @@ Restart Claude Desktop after saving. You should see **GitHub Projects** appear i
 
 ### Available MCP tools
 
+Every tool requires `owner`, `owner_type`, and `project_number` — pass them on every call.
+
 | Tool | Description |
 | --- | --- |
 | `list_project_items` | Return all items on the board with their field values |
@@ -420,7 +444,7 @@ Restart Claude Desktop after saving. You should see **GitHub Projects** appear i
 
 Once connected, you can say things like:
 
-- "Show me everything on the project board."
+- "Show me everything on the AdsWireIO project board #1."
 - "Create a task called 'Migrate auth service to OAuth 2.1' with a description of the acceptance criteria."
 - "Move item PVTI_xxx to Done."
 - "Archive all items with status Cancelled." *(Claude will call `list_project_items` then loop over matching IDs)*
@@ -438,7 +462,7 @@ The server always returns structured JSON; Claude formats it in the conversation
 
 ## GitHub Actions Integration
 
-Store your token as a repository or organization secret (e.g. `GH_PROJECT_TOKEN`), then use the script directly in a workflow step.
+Store your token as a repository or organization secret (e.g. `GH_PROJECT_TOKEN`), then use the script directly in a workflow step. Pass owner and project identity as CLI flags so each workflow controls its own target board.
 
 **Move an issue to "In Progress" when a pull request is opened:**
 
@@ -458,13 +482,10 @@ jobs:
       - name: Link PR to project
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
-          GITHUB_OWNER: my-org
-          GITHUB_OWNER_TYPE: org
-          GITHUB_PROJECT_NUMBER: 1
-          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          python scripts/github_project_crud.py link-pr \
-            --pr-url "${{ github.event.pull_request.html_url }}"
+          python scripts/github_project_crud.py \
+            --owner my-org --owner-type org --project-number 1 \
+            link-pr --pr-url "${{ github.event.pull_request.html_url }}"
 ```
 
 **Create a draft item from a workflow input:**
@@ -486,45 +507,48 @@ jobs:
       - name: Create project item
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
-          GITHUB_OWNER: my-org
-          GITHUB_OWNER_TYPE: org
-          GITHUB_PROJECT_NUMBER: 1
-          GITHUB_REPOSITORY: my-org/my-repo
         run: |
-          python scripts/github_project_crud.py create-item \
-            --title "${{ inputs.title }}"
+          python scripts/github_project_crud.py \
+            --owner my-org --owner-type org --project-number 1 \
+            create-item --title "${{ inputs.title }}"
 ```
 
 **Pipe output into `jq` to extract values for downstream steps:**
 
 ```bash
-ITEM_ID=$(python scripts/github_project_crud.py create-item --title "New item" | jq -r '.id')
-python scripts/github_project_crud.py update-field \
-  --item-id "$ITEM_ID" \
-  --field "Status" \
-  --value "In Progress"
+ITEM_ID=$(python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  create-item --title "New item" | jq -r '.id')
+
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  update-field --item-id "$ITEM_ID" --field "Status" --value "In Progress"
 ```
 
 ---
 
 ## Using Multiple Projects
 
-Switch between projects by changing the environment variables — no code changes required:
+Pass different flags per invocation — no env var changes required:
 
 ```bash
-GITHUB_OWNER=another-org GITHUB_PROJECT_NUMBER=7 \
-  python scripts/github_project_crud.py list-items
+# Org project
+python scripts/github_project_crud.py \
+  --owner my-org --owner-type org --project-number 1 \
+  list-items
+
+# Another org, different board
+python scripts/github_project_crud.py \
+  --owner another-org --owner-type org --project-number 7 \
+  list-items
+
+# User-owned project
+python scripts/github_project_crud.py \
+  --owner my-user --owner-type user --project-number 2 \
+  list-fields
 ```
 
-For user-owned projects:
-
-```bash
-export GITHUB_OWNER=my-user
-export GITHUB_OWNER_TYPE=user
-export GITHUB_PROJECT_NUMBER=2
-export GITHUB_REPOSITORY=my-user/my-repo
-python scripts/github_project_crud.py list-fields
-```
+If you always target the same board, set `GITHUB_OWNER`, `GITHUB_OWNER_TYPE`, and `GITHUB_PROJECT_NUMBER` as env vars and omit the flags entirely.
 
 ---
 
@@ -539,7 +563,7 @@ The toolkit has two entry points that share the same core library:
 
 ### CLI request flow
 
-1. CLI arguments are parsed by `argparse`; all required env vars are validated before any API call is made.
+1. CLI arguments are parsed by `argparse`; `--owner`, `--owner-type`, and `--project-number` flags are applied to the environment before validation, overriding any corresponding env vars.
 2. Every command resolves the project's node ID via `get_project_id()`, which caches the result in-process so subsequent calls within the same invocation are free.
 3. All GitHub API calls go through `graphql_request()`, which handles authentication, JSON encoding, timeout (30 s), and error classification.
 4. `get_project_items()` and `get_project_fields()` implement cursor-based pagination and follow all `hasNextPage` signals until the full result set is fetched.
@@ -547,7 +571,7 @@ The toolkit has two entry points that share the same core library:
 
 ### MCP server flow
 
-`mcp_server.py` imports `github_project_crud` directly and registers each public function as a `FastMCP` tool. Tool return values are serialized JSON strings so Claude can read and summarize them. The server runs a persistent SSE loop on `127.0.0.1:8765`; Claude Desktop connects once and reuses the connection for the lifetime of the conversation.
+`mcp_server.py` imports `github_project_crud` directly and registers each public function as a `FastMCP` tool. Each tool call invokes `_apply_context()`, which sets the three project env vars and clears the in-process cache — making it safe to target different boards in the same server session. Tool return values are serialized JSON strings so Claude can read and summarize them. The server runs a persistent SSE loop on `127.0.0.1:8765`; Claude Desktop connects once and reuses the connection for the lifetime of the conversation.
 
 ### Logging
 
@@ -579,7 +603,7 @@ pip install -e ".[dev]"
 # CLI + MCP server
 pip install -e ".[dev,mcp]"
 
-# Run the test suite (41 tests, no network required)
+# Run the test suite (40 tests, no network required)
 python -m pytest tests/ -v
 
 # Validate syntax without running tests
