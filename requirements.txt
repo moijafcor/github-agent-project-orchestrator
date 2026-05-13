@@ -1,0 +1,4 @@
+# Runtime dependencies
+#
+# This project intentionally has no third-party runtime dependencies.
+# It uses only the Python 3.11+ standard library.
