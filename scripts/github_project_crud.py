@@ -8,7 +8,6 @@ across repositories, organizations, users, and project boards.
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import os
 import re
@@ -137,8 +136,8 @@ def graphql_request(query: str, variables: dict[str, Any] | None = None) -> dict
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        log_event("warning", "github_api_http_error", status_code=exc.code)
-        raise ProjectCrudError(f"GitHub API HTTP {exc.code}: {body}") from exc
+        log_event("warning", "github_api_http_error", status_code=exc.code, response_size=len(body))
+        raise ProjectCrudError(f"GitHub API request failed with HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
         log_event("warning", "github_api_url_error", reason_type=type(exc.reason).__name__)
         raise ProjectCrudError(f"Could not reach GitHub API: {exc.reason}") from exc
@@ -146,8 +145,8 @@ def graphql_request(query: str, variables: dict[str, Any] | None = None) -> dict
     try:
         decoded = json.loads(body)
     except json.JSONDecodeError as exc:
-        log_event("warning", "github_api_invalid_json")
-        raise ProjectCrudError(f"GitHub API returned invalid JSON: {body}") from exc
+        log_event("warning", "github_api_invalid_json", response_size=len(body))
+        raise ProjectCrudError("GitHub API returned invalid JSON") from exc
 
     if decoded.get("errors"):
         log_event("warning", "github_api_graphql_errors", error_count=len(decoded["errors"]))
@@ -155,31 +154,9 @@ def graphql_request(query: str, variables: dict[str, Any] | None = None) -> dict
 
     data = decoded.get("data")
     if data is None:
-        log_event("warning", "github_api_missing_data")
-        raise ProjectCrudError(f"GitHub API response did not include data: {body}")
+        log_event("warning", "github_api_missing_data", response_size=len(body))
+        raise ProjectCrudError("GitHub API response did not include data")
     return data
-
-
-def get_owner_id() -> str:
-    if "owner_id" in _cache:
-        return _cache["owner_id"]
-
-    owner_type = env("GITHUB_OWNER_TYPE").lower()
-    field = "organization" if owner_type == "org" else "user"
-    query = f"""
-    query($login: String!) {{
-      {field}(login: $login) {{
-        id
-      }}
-    }}
-    """
-    data = graphql_request(query, {"login": env("GITHUB_OWNER")})
-    owner = data.get(field)
-    if not owner:
-        raise ProjectCrudError(f"Could not resolve {owner_type} owner: {env('GITHUB_OWNER')}")
-
-    _cache["owner_id"] = owner["id"]
-    return _cache["owner_id"]
 
 
 def get_project_id() -> str:
@@ -226,7 +203,11 @@ def _field_from_node(node: dict[str, Any]) -> dict[str, Any]:
         "type": node.get("__typename"),
     }
     if node.get("options") is not None:
-        field["options"] = {option["name"]: option["id"] for option in node["options"]}
+        field["options"] = {
+            option["name"]: option["id"]
+            for option in node["options"]
+            if isinstance(option, dict) and "name" in option and "id" in option
+        }
     return field
 
 
@@ -452,13 +433,14 @@ def get_project_items() -> list[dict[str, Any]]:
 
 
 def _hydrate_item_field_values(item: dict[str, Any]) -> dict[str, Any]:
+    """Fetch additional fieldValues pages for an item when the first page was truncated."""
     field_values = item.get("fieldValues") or {}
     page_info = field_values.get("pageInfo") or {}
     if not page_info.get("hasNextPage"):
         return item
 
-    hydrated = copy.deepcopy(item)
-    nodes = list((hydrated.get("fieldValues") or {}).get("nodes") or [])
+    nodes = list(field_values.get("nodes") or [])
+    hydrated = {**item, "fieldValues": {**field_values, "nodes": nodes}}
     cursor = page_info.get("endCursor")
     query = """
     query($itemId: ID!, $cursor: String) {
@@ -574,6 +556,7 @@ def _hydrate_item_field_values(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Transform a raw GraphQL project item node into a flat, consistent dict."""
     values: dict[str, Any] = {}
     for node in (item.get("fieldValues") or {}).get("nodes") or []:
         field = node.get("field") or {}
@@ -592,9 +575,13 @@ def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
             values[name] = node.get("date")
         elif typename == "ProjectV2ItemFieldUserValue":
             users = (node.get("users") or {}).get("nodes") or []
+            if len(users) >= 20:
+                log_event("warning", "user_field_may_be_truncated", item_id=item.get("id"), field=name)
             values[name] = [user.get("login") for user in users]
         elif typename == "ProjectV2ItemFieldLabelValue":
             labels = (node.get("labels") or {}).get("nodes") or []
+            if len(labels) >= 20:
+                log_event("warning", "label_field_may_be_truncated", item_id=item.get("id"), field=name)
             values[name] = [label.get("name") for label in labels]
         elif typename == "ProjectV2ItemFieldRepositoryValue":
             repository = node.get("repository") or {}
@@ -614,6 +601,7 @@ def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_draft_item(title: str, body: str | None = None) -> dict[str, Any]:
+    """Create a new draft issue in the configured GitHub Project and return the created item."""
     mutation = """
     mutation($projectId: ID!, $title: String!, $body: String) {
       addProjectV2DraftIssue(input: {projectId: $projectId, title: $title, body: $body}) {
@@ -633,10 +621,14 @@ def create_draft_item(title: str, body: str | None = None) -> dict[str, Any]:
     }
     """
     data = graphql_request(mutation, {"projectId": get_project_id(), "title": title, "body": body})
-    return data["addProjectV2DraftIssue"]["projectItem"]
+    result = (data.get("addProjectV2DraftIssue") or {}).get("projectItem")
+    if result is None:
+        raise ProjectCrudError("GitHub API returned unexpected response for create-item")
+    return result
 
 
 def archive_item(item_id: str) -> dict[str, Any]:
+    """Archive a project item by its node ID and return the updated item."""
     mutation = """
     mutation($projectId: ID!, $itemId: ID!) {
       archiveProjectV2Item(input: {projectId: $projectId, itemId: $itemId}) {
@@ -648,7 +640,10 @@ def archive_item(item_id: str) -> dict[str, Any]:
     }
     """
     data = graphql_request(mutation, {"projectId": get_project_id(), "itemId": item_id})
-    return data["archiveProjectV2Item"]["item"]
+    result = (data.get("archiveProjectV2Item") or {}).get("item")
+    if result is None:
+        raise ProjectCrudError("GitHub API returned unexpected response for archive-item")
+    return result
 
 
 def _get_field(field_name: str) -> dict[str, Any]:
@@ -682,7 +677,10 @@ def _update_field_value(item_id: str, field_name: str, value: dict[str, Any]) ->
         "value": value,
     }
     data = graphql_request(mutation, variables)
-    return data["updateProjectV2ItemFieldValue"]["projectV2Item"]
+    result = (data.get("updateProjectV2ItemFieldValue") or {}).get("projectV2Item")
+    if result is None:
+        raise ProjectCrudError("GitHub API returned unexpected response for update-field")
+    return result
 
 
 def update_text_field(item_id: str, field_name: str, value: str) -> dict[str, Any]:
@@ -813,7 +811,10 @@ def add_content_item(content_node_id: str) -> dict[str, Any]:
     }
     """
     data = graphql_request(mutation, {"projectId": get_project_id(), "contentId": content_node_id})
-    return data["addProjectV2ItemById"]["item"]
+    result = (data.get("addProjectV2ItemById") or {}).get("item")
+    if result is None:
+        raise ProjectCrudError("GitHub API returned unexpected response for add-item")
+    return result
 
 
 def cmd_create_item(args: argparse.Namespace) -> dict[str, Any]:
@@ -831,15 +832,16 @@ def cmd_list_fields(_: argparse.Namespace) -> dict[str, dict[str, Any]]:
 def cmd_update_field(args: argparse.Namespace) -> dict[str, Any]:
     if args.type == "text":
         return update_text_field(args.item_id, args.field, args.value)
-    if args.type == "number":
+    elif args.type == "number":
         try:
             value = float(args.value)
         except ValueError as exc:
             raise ProjectCrudError("--value must be numeric when --type number is used") from exc
         return update_number_field(args.item_id, args.field, value)
-    if args.type == "single-select":
+    elif args.type == "single-select":
         return update_single_select_field(args.item_id, args.field, args.value)
-    raise ProjectCrudError(f"Unsupported field type: {args.type}")
+    else:
+        raise ProjectCrudError(f"Unsupported field type: {args.type}")
 
 
 def cmd_archive_item(args: argparse.Namespace) -> dict[str, Any]:
