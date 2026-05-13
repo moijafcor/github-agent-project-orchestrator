@@ -32,7 +32,6 @@ REQUIRED_ENV = (
     "GITHUB_OWNER",
     "GITHUB_OWNER_TYPE",
     "GITHUB_PROJECT_NUMBER",
-    "GITHUB_REPOSITORY",
 )
 
 _cache: dict[str, Any] = {}
@@ -91,10 +90,6 @@ def validate_env() -> None:
     project_number = env("GITHUB_PROJECT_NUMBER")
     if not project_number.isdigit():
         raise ProjectCrudError("GITHUB_PROJECT_NUMBER must be an integer")
-
-    repository = env("GITHUB_REPOSITORY")
-    if not re.fullmatch(r"[^/\s]+/[^/\s]+", repository):
-        raise ProjectCrudError("GITHUB_REPOSITORY must be in owner/repo format")
 
 
 def validate_project_version(project_version: str) -> None:
@@ -707,28 +702,6 @@ def update_single_select_field(item_id: str, field_name: str, option_name: str) 
     return _update_field_value(item_id, field_name, {"singleSelectOptionId": option_id})
 
 
-def get_repository_id() -> str:
-    if "repository_id" in _cache:
-        return _cache["repository_id"]
-
-    owner, name = env("GITHUB_REPOSITORY").split("/", 1)
-    query = """
-    query($owner: String!, $name: String!) {
-      repository(owner: $owner, name: $name) {
-        id
-        nameWithOwner
-      }
-    }
-    """
-    data = graphql_request(query, {"owner": owner, "name": name})
-    repository = data.get("repository")
-    if not repository:
-        raise ProjectCrudError(f"Could not resolve repository: {env('GITHUB_REPOSITORY')}")
-
-    _cache["repository"] = repository
-    _cache["repository_id"] = repository["id"]
-    return _cache["repository_id"]
-
 
 def _parse_github_url(url: str, expected_kind: str) -> tuple[str, str, int]:
     match = GITHUB_CONTENT_URL_RE.match(url)
@@ -865,6 +838,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help=f"GitHub Project API version to target (default: {DEFAULT_PROJECT_VERSION})",
     )
+    version_parent.add_argument(
+        "--owner",
+        default=None,
+        help="GitHub owner login — org or user (overrides GITHUB_OWNER)",
+    )
+    version_parent.add_argument(
+        "--owner-type",
+        choices=("org", "user"),
+        default=None,
+        help="Owner type: 'org' or 'user' (overrides GITHUB_OWNER_TYPE)",
+    )
+    version_parent.add_argument(
+        "--project-number",
+        type=int,
+        default=None,
+        help="Project board number (overrides GITHUB_PROJECT_NUMBER)",
+    )
 
     parser = argparse.ArgumentParser(
         description="CRUD items in a GitHub Projects v2 board with the GraphQL API.",
@@ -960,6 +950,13 @@ def command_log_fields(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.owner:
+        os.environ["GITHUB_OWNER"] = args.owner
+    if args.owner_type:
+        os.environ["GITHUB_OWNER_TYPE"] = args.owner_type
+    if args.project_number is not None:
+        os.environ["GITHUB_PROJECT_NUMBER"] = str(args.project_number)
 
     try:
         log_event("info", "command_started", **command_log_fields(args))

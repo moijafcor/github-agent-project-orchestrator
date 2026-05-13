@@ -17,7 +17,6 @@ VALID_ENV = {
     "GITHUB_OWNER": "owner",
     "GITHUB_OWNER_TYPE": "org",
     "GITHUB_PROJECT_NUMBER": "1",
-    "GITHUB_REPOSITORY": "owner/repo",
 }
 
 
@@ -36,11 +35,6 @@ class EnvironmentTests(unittest.TestCase):
             with self.assertRaisesRegex(crud.ProjectCrudError, "org' or 'user"):
                 crud.validate_env()
 
-    def test_validate_env_rejects_bad_repository_format(self) -> None:
-        env = {**VALID_ENV, "GITHUB_REPOSITORY": "owner/repo/extra"}
-        with mock.patch.dict(os.environ, env, clear=True):
-            with self.assertRaisesRegex(crud.ProjectCrudError, "owner/repo"):
-                crud.validate_env()
 
 
 class UrlParsingTests(unittest.TestCase):
