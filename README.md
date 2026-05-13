@@ -384,7 +384,13 @@ Keep this terminal open while using Claude Desktop.
 
 ### Claude Desktop configuration
 
-Add the server to your Claude Desktop config (typically `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+Add the server to your Claude Desktop config. Default locations by platform:
+
+| Platform | Path |
+| --- | --- |
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
 
 ```json
 {
